@@ -18,6 +18,12 @@ const v0 = createClient(
   process.env.V0_API_URL ? { baseUrl: process.env.V0_API_URL } : {},
 )
 
+/** Set DISABLE_CHAT_RATE_LIMIT=1 or true in .env for local development. */
+function isChatRateLimitDisabled(): boolean {
+  const v = process.env.DISABLE_CHAT_RATE_LIMIT
+  return v === '1' || v === 'true'
+}
+
 function getClientIP(request: NextRequest): string {
   const forwarded = request.headers.get('x-forwarded-for')
   const realIP = request.headers.get('x-real-ip')
@@ -47,43 +53,45 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // Rate limiting
-    if (session?.user?.id) {
-      // Authenticated user rate limiting
-      const chatCount = await getChatCountByUserId({
-        userId: session.user.id,
-        differenceInHours: 24,
-      })
+    // Rate limiting (new chats per 24h — see lib/entitlements.ts)
+    if (!isChatRateLimitDisabled()) {
+      if (session?.user?.id) {
+        // Authenticated user rate limiting
+        const chatCount = await getChatCountByUserId({
+          userId: session.user.id,
+          differenceInHours: 24,
+        })
 
-      const userType = session.user.type
-      if (chatCount >= entitlementsByUserType[userType].maxMessagesPerDay) {
-        return new ChatSDKError('rate_limit:chat').toResponse()
+        const userType = session.user.type
+        if (chatCount >= entitlementsByUserType[userType].maxMessagesPerDay) {
+          return new ChatSDKError('rate_limit:chat').toResponse()
+        }
+
+        console.log('API request:', {
+          message,
+          chatId,
+          streaming,
+          userId: session.user.id,
+        })
+      } else {
+        // Anonymous user rate limiting
+        const clientIP = getClientIP(request)
+        const chatCount = await getChatCountByIP({
+          ipAddress: clientIP,
+          differenceInHours: 24,
+        })
+
+        if (chatCount >= anonymousEntitlements.maxMessagesPerDay) {
+          return new ChatSDKError('rate_limit:chat').toResponse()
+        }
+
+        console.log('API request (anonymous):', {
+          message,
+          chatId,
+          streaming,
+          ip: clientIP,
+        })
       }
-
-      console.log('API request:', {
-        message,
-        chatId,
-        streaming,
-        userId: session.user.id,
-      })
-    } else {
-      // Anonymous user rate limiting
-      const clientIP = getClientIP(request)
-      const chatCount = await getChatCountByIP({
-        ipAddress: clientIP,
-        differenceInHours: 24,
-      })
-
-      if (chatCount >= anonymousEntitlements.maxMessagesPerDay) {
-        return new ChatSDKError('rate_limit:chat').toResponse()
-      }
-
-      console.log('API request (anonymous):', {
-        message,
-        chatId,
-        streaming,
-        ip: clientIP,
-      })
     }
 
     console.log('Using baseUrl:', process.env.V0_API_URL || 'default')

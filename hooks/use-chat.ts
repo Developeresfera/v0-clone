@@ -127,6 +127,8 @@ export function useChat(chatId: string) {
           const errorData = await response.json()
           if (errorData.message) {
             errorMessage = errorData.message
+          } else if (errorData.details) {
+            errorMessage = errorData.details
           } else if (response.status === 429) {
             errorMessage =
               'You have exceeded your maximum number of messages for the day. Please try again later.'
